@@ -4,7 +4,7 @@
 #include "SDL.h"
 
 #define SDL_VIDEO_FLAGS 0
-#define FRAMERATE 60
+#define FRAMERATE 30
 
 #define WHOMP_SPEED    3/2.0
 #define SQUIBBLE_SPEED 2/1.0
@@ -248,7 +248,8 @@ int main(int argc, char **argv) {
         }
       }
       cairo_set_source_rgb(cr, 1.0, 1.0, 1.0);
-      cairo_fill(cr);
+      cairo_set_line_width(cr, 1/8.0);
+      cairo_stroke(cr);
 
       /* draw whomp */
       cairo_set_matrix(cr, &cm_field);
@@ -258,18 +259,22 @@ int main(int argc, char **argv) {
       cairo_line_to(cr,  1/2.0,  1/2.0);
       cairo_line_to(cr, -1/2.0,  1/2.0);
       cairo_close_path(cr);
-      cairo_set_source_rgb(cr, 1.0, 1.0, 1.0);
+      cairo_set_source_rgb(cr, 0.0, 0.0, 0.0);
       cairo_set_line_width(cr, 1/8.0);
-      cairo_stroke(cr);
+      cairo_stroke_preserve(cr);
+      cairo_set_source_rgb(cr, 1.0, 1.0, 1.0);
+      cairo_fill(cr);
 
       /* draw squibble */
       cairo_set_matrix(cr, &cm_field);
       cairo_translate(cr, squibble.x, squibble.y);
       cairo_arc(cr, 0, 0, 1/2.0, 0, 2 * M_PI);
       cairo_close_path(cr);
-      cairo_set_source_rgb(cr, 1.0, 1.0, 1.0);
+      cairo_set_source_rgb(cr, 0.0, 0.0, 0.0);
       cairo_set_line_width(cr, 1/8.0);
-      cairo_stroke(cr);
+      cairo_stroke_preserve(cr);
+      cairo_set_source_rgb(cr, 1.0, 1.0, 1.0);
+      cairo_fill(cr);
     }
 
     { /* Update Display */
