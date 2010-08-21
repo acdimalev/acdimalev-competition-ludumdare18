@@ -7,6 +7,16 @@
 #define FRAMERATE 60
 
 #define FIELD_RES (1 << 4)
+#define STUB_PATTERN { \
+  0,0,0,0,0,0,0,0, \
+  0,0,0,0,0,0,0,0, \
+  0,0,0,0,0,0,0,0, \
+  0,0,0,0,0,0,0,0, \
+  0,0,0,0,1,1,0,0, \
+  0,0,0,0,1,0,0,0, \
+  0,0,0,0,0,0,0,0, \
+  0,0,0,0,0,0,0,0  \
+}
 
 #define FIELD_RES_IS_INVALID (FIELD_RES % 2)
 
@@ -17,10 +27,26 @@ void generate_field(int *field) {
   int x, y;
 
   int s = FIELD_RES / 2;
+  int pattern[] = STUB_PATTERN;
+
+  /* load stub pattern */
 
   for (y = 0; y < s; y = y + 1) {
     for (x = 0; x < s; x = x + 1) {
-      field[2 * y * s + x] = (x + y) % 2;
+      field[2 * y * s + x] = pattern[y * s + x];
+    }
+  }
+
+  /* copy pattern to other quadrants */
+
+  for (y = 0; y < s; y = y + 1) {
+    for (x = 0; x < s; x = x + 1) {
+      int yi = 2 * s - y - 1;
+      int xi = 2 * s - x - 1;
+
+      field[2 * y  * s + xi] = field[2 * y * s + x];
+      field[2 * yi * s + x ] = field[2 * y * s + x];
+      field[2 * yi * s + xi] = field[2 * y * s + x];
     }
   }
 }
