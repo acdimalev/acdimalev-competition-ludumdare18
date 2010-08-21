@@ -6,8 +6,24 @@
 #define SDL_VIDEO_FLAGS 0
 #define FRAMERATE 60
 
+#define FIELD_RES (1 << 4)
+
+#define FIELD_RES_IS_INVALID (FIELD_RES % 2)
+
 #define true -1
 #define false 0
+
+void generate_field(int *field) {
+  int x, y;
+
+  int s = FIELD_RES / 2;
+
+  for (y = 0; y < s; y = y + 1) {
+    for (x = 0; x < s; x = x + 1) {
+      field[2 * y * s + x] = (x + y) % 2;
+    }
+  }
+}
 
 int main(int argc, char **argv) {
   int    hres, vres, width, height, pixels;
@@ -16,9 +32,16 @@ int main(int argc, char **argv) {
   SDL_Surface    *sdl_surface;
   Uint32         next_frame;
   cairo_t        *cr;
-  cairo_matrix_t cm_display;
+  cairo_matrix_t cm_display, cm_field;
+
+  int field[FIELD_RES * FIELD_RES];
 
   int running = true;
+
+  if (FIELD_RES_IS_INVALID) {
+    fprintf(stderr, "Field resolution must be a multiple of two.\n");
+    exit(0);
+  }
 
   /* SETUP */
 
@@ -79,11 +102,24 @@ int main(int argc, char **argv) {
         scale * vres / height );
   }
 
+  { /* field transformation */
+    cairo_matrix_t *m = &cm_field;
+
+    double scale = 1.0 / FIELD_RES / aspect;
+
+    cairo_matrix_init_identity(m);
+    cairo_matrix_multiply(m, m, &cm_display);
+
+    cairo_matrix_scale(m, scale, scale);
+  }
+
   { /* delay */
     Uint32 now = SDL_GetTicks();
 
     next_frame = now + 1000.0 / FRAMERATE;
   }
+
+  generate_field(field);
 
   fprintf(stderr, "-- MARK -- setup complete\n");
 
@@ -94,6 +130,9 @@ int main(int argc, char **argv) {
   while (running) {
 
     { /* Render Frame */
+      int x, y;
+
+      int s = FIELD_RES / 2;
 
       /* clear screen */
       cairo_set_operator(cr, CAIRO_OPERATOR_CLEAR);
@@ -101,12 +140,21 @@ int main(int argc, char **argv) {
       cairo_set_operator(cr, CAIRO_OPERATOR_OVER);
 
       /* draw stuff */
-      cairo_set_matrix(cr, &cm_display);
-      cairo_move_to(cr, -1/4.0, -1/4.0);
-      cairo_line_to(cr,  1/4.0, -1/4.0);
-      cairo_line_to(cr,  1/4.0,  1/4.0);
-      cairo_line_to(cr, -1/4.0,  1/4.0);
-      cairo_close_path(cr);
+      for (y = 0; y < 2 * s; y = y + 1) {
+        for (x = 0; x < 2 * s; x = x + 1) {
+          if (! field[2 * y * s + x]) { continue; }
+
+          cairo_set_matrix(cr, &cm_field);
+          cairo_translate(cr, x - s + 1/2.0, y - s + 1/2.0);
+
+          cairo_move_to(cr, -1/4.0, -1/4.0);
+          cairo_line_to(cr,  1/4.0, -1/4.0);
+          cairo_line_to(cr,  1/4.0,  1/4.0);
+          cairo_line_to(cr, -1/4.0,  1/4.0);
+          cairo_close_path(cr);
+        }
+      }
+
       cairo_set_source_rgb(cr, 1.0, 1.0, 1.0);
       cairo_fill(cr);
     }
