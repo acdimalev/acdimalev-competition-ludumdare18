@@ -61,6 +61,27 @@ void generate_field(int *field) {
   }
 }
 
+int collides_with_field(int *field, double x, double y, double r) {
+  int xi, yi;
+
+  int y0 = floor(y - r);
+  int y1 = ceil(y + r);
+  int x0 = floor(x - r);
+  int x1 = ceil(x + r);
+
+  int s  = FIELD_RES / 2;
+
+  for (yi = y0; yi < y1; yi = yi + 1) {
+    for (xi = x0; xi < x1; xi = xi + 1) {
+      if ( field[(2 * (yi + s) * s + (xi + s))] ) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
 int main(int argc, char **argv) {
   int    hres, vres, width, height, pixels;
   double aspect, scale;
@@ -263,8 +284,26 @@ int main(int argc, char **argv) {
     }
 
     { /* Animate */
-      whomp.x = whomp.x + player.x * WHOMP_SPEED / FRAMERATE;
-      whomp.y = whomp.y + player.y * WHOMP_SPEED / FRAMERATE;
+      double x0 = whomp.x;
+      double y0 = whomp.y;
+      double r  = 1/2.0;
+
+      double x = x0 + player.x * WHOMP_SPEED / FRAMERATE;
+      double y = y0 + player.y * WHOMP_SPEED / FRAMERATE;
+
+      if ( collides_with_field(field, x, y0, r) ) {
+        x = x0;
+      }
+      if ( collides_with_field(field, x0, y, r) ) {
+        y = y0;
+      }
+      if ( collides_with_field(field, x, y, r) ) {
+        x = x0;
+        y = y0;
+      }
+
+      whomp.x = x;
+      whomp.y = y;
     }
 
   }
