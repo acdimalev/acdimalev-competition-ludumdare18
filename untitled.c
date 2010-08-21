@@ -83,8 +83,8 @@ int main(int argc, char **argv) {
     }
 
     if ( (SDL_Rect **) -1 == modes ) {
-      hres = 320;
-      vres = 240;
+      hres = 640;
+      vres = 480;
     } else {
       hres = modes[0]->w;
       vres = modes[0]->h;
@@ -173,10 +173,10 @@ int main(int argc, char **argv) {
           cairo_set_matrix(cr, &cm_field);
           cairo_translate(cr, x - s + 1/2.0, y - s + 1/2.0);
 
-          cairo_move_to(cr, -1/4.0, -1/4.0);
-          cairo_line_to(cr,  1/4.0, -1/4.0);
-          cairo_line_to(cr,  1/4.0,  1/4.0);
-          cairo_line_to(cr, -1/4.0,  1/4.0);
+          cairo_move_to(cr, -1/2.0, -1/2.0);
+          cairo_line_to(cr,  1/2.0, -1/2.0);
+          cairo_line_to(cr,  1/2.0,  1/2.0);
+          cairo_line_to(cr, -1/2.0,  1/2.0);
           cairo_close_path(cr);
         }
       }
