@@ -13,11 +13,7 @@
 #define false 0
 
 struct part {
-  struct path *paths;
-};
-
-struct pen {
-  double x, y;
+  struct path paths;
 };
 
 void render_1x1_box(cairo_t *cr) {
@@ -38,7 +34,7 @@ void path_render(
     cairo_t *cr,
     struct  path *path
   ) {
-  struct path_segment *segment = path->segments;
+  struct path_segment *segment = (struct path_segment *) &path->segments;
 
   while (segment) {
     path_segment_render(cr, segment);
@@ -62,8 +58,9 @@ void render_part(
     cairo_t *cr,
     struct part *part
   ) {
-  struct path *path = part->paths;
+  struct path *path = &part->paths;
 
+  cairo_set_line_width(cr, 1/32.0);
   while (path) {
     path_render(cr, path);
     path = path->next;
@@ -74,6 +71,8 @@ void render_dots(cairo_t *cr, int subdiv) {
   int x, y;
 
   int a = 1 << subdiv;
+
+  cairo_new_path(cr);
 
   for (y = -a; y <= a; y = y + 1) {
     for (x = -a; x <= a; x = x + 1) {
@@ -90,7 +89,7 @@ void render_dots(cairo_t *cr, int subdiv) {
   cairo_stroke(cr);
 }
 
-void render_pen(cairo_t *cr, struct pen *pen) {
+void render_pen(cairo_t *cr, struct pos *pen) {
   cairo_arc(cr, pen->x, pen->y, 1/32.0, 0, 2 * M_PI);
   cairo_set_source_rgb(cr, 0.0, 0.0, 0.0);
   cairo_set_line_width(cr, 1/64.0);
@@ -108,13 +107,61 @@ void render_outline(cairo_t *cr) {
   cairo_restore(cr);
 }
 
+void path_last_xy(
+    struct path_segment *segment,
+    struct pos          *pen
+  ) {
+  struct path_segment_move  *segment_move;
+  struct path_segment_line  *segment_line;
+  struct path_segment_curve *segment_curve;
+
+  while (true) {
+    if (PATH_MOVE == segment->type) {
+      segment_move = (struct path_segment_move *) segment;
+
+      pen->x = segment_move->p.x;
+      pen->y = segment_move->p.y;
+      break;
+    }
+    if (PATH_LINE == segment->type) {
+      segment_line = (struct path_segment_line *) segment;
+
+      pen->x = segment_line->p.x;
+      pen->y = segment_line->p.y;
+      break;
+    }
+    if (PATH_CURVE == segment->type) {
+      segment_curve = (struct path_segment_curve *) segment;
+
+      pen->x = segment_curve->p3.x;
+      pen->y = segment_curve->p3.y;
+      break;
+    }
+    segment = segment->prev;
+  }
+}
+
+// segment_line = path_segment_line_append(segment_line, *pen);
+struct path_segment_line *path_segment_line_append(
+    struct path_segment *segment,
+    struct pos          **pen
+  ) {
+  struct path_segment_line *next = (struct path_segment_line *)
+    malloc( sizeof(struct path_segment_line) );
+
+  *pen = &next->p;
+
+  path_last_xy(segment, *pen);
+
+  next->base.prev = segment;
+  next->base.next = NULL;
+  next->base.type = PATH_LINE;
+  segment->next   = (struct path_segment *) next;
+
+  return next;
+}
+
 /*
-case SDLK_C:
-  layer->color = 1 - layer->color;
-  break;
-case SDLK_F:
-  layer->fill = 1 - layer->fill;
-  break;
 case SDLK_T:
   /* toggle segment type * /
   break;
@@ -134,7 +181,15 @@ int main(int argc, char **argv) {
   int running = true;
   int subdiv  = 1;
 
-  struct pen pen = {0, 0};
+  struct part part = {
+    NULL, NULL, NULL, NULL, PATH_MOVE, 0, 0, 0, 0
+  };
+
+  struct path_segment *segment = (struct path_segment *)
+    &part.paths.segments.base; /* first segment of the first path */
+  struct path         *path    = &part.paths;
+
+  struct pos *pen = &part.paths.segments.p;
 
   /* SETUP */
 
@@ -230,8 +285,9 @@ int main(int argc, char **argv) {
       cairo_set_matrix(cr, &cm_field);
 
       render_1x1_box(cr);
+      render_part(cr, &part);
       render_dots(cr, subdiv);
-      render_pen(cr, &pen);
+      render_pen(cr, pen);
     }
 
     { /* Update Display */
@@ -284,16 +340,27 @@ int main(int argc, char **argv) {
                 subdiv = 4;
                 break;
               case SDLK_LEFT:
-                pen.x = pen.x - 1.0 / (1 << subdiv);
+                pen->x = pen->x - 1.0 / (1 << subdiv);
                 break;
               case SDLK_RIGHT:
-                pen.x = pen.x + 1.0 / (1 << subdiv);
+                pen->x = pen->x + 1.0 / (1 << subdiv);
                 break;
               case SDLK_DOWN:
-                pen.y = pen.y - 1.0 / (1 << subdiv);
+                pen->y = pen->y - 1.0 / (1 << subdiv);
                 break;
               case SDLK_UP:
-                pen.y = pen.y + 1.0 / (1 << subdiv);
+                pen->y = pen->y + 1.0 / (1 << subdiv);
+                break;
+              case SDLK_RETURN:
+                segment = (struct path_segment *)
+                  path_segment_line_append(segment, &pen);
+                fprintf(stderr, "-- MARK -- new segment created\n");
+                break;
+              case SDLK_c:
+                path->color = 1 - path->color;
+                break;
+              case SDLK_f:
+                path->fill  = 1 - path->fill;
                 break;
             }
             break;

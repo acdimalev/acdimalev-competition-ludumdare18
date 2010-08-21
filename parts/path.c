@@ -6,14 +6,14 @@ void path_segment_move_render(
     cairo_t *cr,
     struct path_segment_move *segment
   ) {
-  cairo_move_to(cr, segment->x, segment->y);
+  cairo_move_to(cr, segment->p.x, segment->p.y);
 }
 
 void path_segment_line_render(
     cairo_t *cr,
     struct path_segment_line *segment
   ) {
-  cairo_line_to(cr, segment->x, segment->y);
+  cairo_line_to(cr, segment->p.x, segment->p.y);
 }
 
 void path_segment_curve_render(
@@ -21,9 +21,9 @@ void path_segment_curve_render(
     struct path_segment_curve *segment
   ) {
   cairo_curve_to(cr,
-      segment->x1, segment->y1,
-      segment->x2, segment->y2,
-      segment->x3, segment->y3
+      segment->p1.x, segment->p1.y,
+      segment->p2.x, segment->p2.y,
+      segment->p3.x, segment->p3.y
     );
 }
 
@@ -50,8 +50,3 @@ void path_segment_render(
   }
 }
 
-/*
-while (segment) {
-  path_segment_render(segment);
-}
-*/

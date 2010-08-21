@@ -1,5 +1,9 @@
 #include <cairo.h>
 
+struct pos {
+  double x, y;
+};
+
 enum path_segment_type {
   PATH_MOVE,
   PATH_LINE,
@@ -8,28 +12,28 @@ enum path_segment_type {
 };
 
 struct path_segment {
-  struct path_segment      *next;
+  struct path_segment      *prev, *next;
   enum   path_segment_type type;
 };
 
 struct path_segment_move {
   struct path_segment base;
-  double x, y;
+  struct pos  p;
 };
 
 struct path_segment_line {
   struct path_segment base;
-  double x, y;
+  struct pos  p;
 };
 
 struct path_segment_curve {
   struct path_segment base;
-  double x1, y1, x2, y2, x3, y3;
+  struct pos  p1, p2, p3;
 };
 
 struct path {
-  struct path         *next;
-  struct path_segment *segments;
+  struct path              *prev, *next;
+  struct path_segment_move segments;
   int    color, fill;
 };
 
