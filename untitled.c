@@ -6,6 +6,8 @@
 #define SDL_VIDEO_FLAGS 0
 #define FRAMERATE 60
 
+#define WHOMP_SPEED 3/2.0
+
 #define FIELD_RES (1 << 4)
 #define STUB_PATTERN { \
   0,0,0,0,0,0,0,0, \
@@ -22,6 +24,14 @@
 
 #define true -1
 #define false 0
+
+struct whomp {
+  double x, y;
+};
+
+struct player {
+  double x, y;
+};
 
 void generate_field(int *field) {
   int x, y;
@@ -60,7 +70,9 @@ int main(int argc, char **argv) {
   cairo_t        *cr;
   cairo_matrix_t cm_display, cm_field;
 
-  int field[FIELD_RES * FIELD_RES];
+  int    field[FIELD_RES * FIELD_RES];
+  struct player player;
+  struct whomp  whomp;
 
   int running = true;
 
@@ -146,6 +158,8 @@ int main(int argc, char **argv) {
   }
 
   generate_field(field);
+  whomp.x = 0;
+  whomp.y = 0;
 
   fprintf(stderr, "-- MARK -- setup complete\n");
 
@@ -165,7 +179,7 @@ int main(int argc, char **argv) {
       cairo_paint(cr);
       cairo_set_operator(cr, CAIRO_OPERATOR_OVER);
 
-      /* draw stuff */
+      /* draw field */
       for (y = 0; y < 2 * s; y = y + 1) {
         for (x = 0; x < 2 * s; x = x + 1) {
           if (! field[2 * y * s + x]) { continue; }
@@ -180,9 +194,20 @@ int main(int argc, char **argv) {
           cairo_close_path(cr);
         }
       }
-
       cairo_set_source_rgb(cr, 1.0, 1.0, 1.0);
       cairo_fill(cr);
+
+      /* draw whomp */
+      cairo_set_matrix(cr, &cm_field);
+      cairo_translate(cr, whomp.x, whomp.y);
+      cairo_move_to(cr, -1/2.0, -1/2.0);
+      cairo_line_to(cr,  1/2.0, -1/2.0);
+      cairo_line_to(cr,  1/2.0,  1/2.0);
+      cairo_line_to(cr, -1/2.0,  1/2.0);
+      cairo_close_path(cr);
+      cairo_set_source_rgb(cr, 1.0, 1.0, 1.0);
+      cairo_set_line_width(cr, 1/8.0);
+      cairo_stroke(cr);
     }
 
     { /* Update Display */
@@ -218,6 +243,28 @@ int main(int argc, char **argv) {
             break;
         }
       }
+    }
+
+    { /* Gather Input */
+      Uint8 *keystate = SDL_GetKeyState(NULL);
+
+      player.x = 0;
+      player.y = 0;
+
+      player.x = player.x - keystate[SDLK_LEFT];
+      player.x = player.x + keystate[SDLK_RIGHT];
+      player.y = player.y - keystate[SDLK_DOWN];
+      player.y = player.y + keystate[SDLK_UP];
+
+      if (-1 > player.x) { player.x = -1; }
+      if ( 1 < player.x) { player.x =  1; }
+      if (-1 > player.y) { player.y = -1; }
+      if ( 1 < player.y) { player.y =  1; }
+    }
+
+    { /* Animate */
+      whomp.x = whomp.x + player.x * WHOMP_SPEED / FRAMERATE;
+      whomp.y = whomp.y + player.y * WHOMP_SPEED / FRAMERATE;
     }
 
   }
