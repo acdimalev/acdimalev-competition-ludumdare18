@@ -6,7 +6,8 @@
 #define SDL_VIDEO_FLAGS 0
 #define FRAMERATE 60
 
-#define WHOMP_SPEED 3/2.0
+#define WHOMP_SPEED    3/2.0
+#define SQUIBBLE_SPEED 2/1.0
 
 #define FIELD_RES (1 << 4)
 #define STUB_PATTERN { \
@@ -27,10 +28,22 @@
 
 struct whomp {
   double x, y;
+  struct squibble *squibble_held;
+};
+
+enum squibble_action {
+  SQUIBBLE_IS_CHARGING_INTO_THE_FRAY,
+  SQUIBBLE_IS_BEING_HELD
+};
+
+struct squibble {
+  double x, y, vx, vy;
+  enum   squibble_action action;
 };
 
 struct player {
   double x, y;
+  int    action;
 };
 
 void generate_field(int *field) {
@@ -92,8 +105,9 @@ int main(int argc, char **argv) {
   cairo_matrix_t cm_display, cm_field;
 
   int    field[FIELD_RES * FIELD_RES];
-  struct player player;
-  struct whomp  whomp;
+  struct player   player;
+  struct whomp    whomp;
+  struct squibble squibble;
 
   int running = true;
 
@@ -179,8 +193,26 @@ int main(int argc, char **argv) {
   }
 
   generate_field(field);
+
+  player.action = 0;
+
   whomp.x = 0;
   whomp.y = 0;
+
+  whomp.squibble_held = NULL;
+
+  {
+    double x = -FIELD_RES / 2.0;
+    double y = 4;
+
+    double d = sqrt(x * x + y * y);
+
+    squibble.x = x;
+    squibble.y = y;
+    squibble.action = SQUIBBLE_IS_CHARGING_INTO_THE_FRAY;
+    squibble.vx = -x / d;
+    squibble.vy = -y / d;
+  }
 
   fprintf(stderr, "-- MARK -- setup complete\n");
 
@@ -229,6 +261,15 @@ int main(int argc, char **argv) {
       cairo_set_source_rgb(cr, 1.0, 1.0, 1.0);
       cairo_set_line_width(cr, 1/8.0);
       cairo_stroke(cr);
+
+      /* draw squibble */
+      cairo_set_matrix(cr, &cm_field);
+      cairo_translate(cr, squibble.x, squibble.y);
+      cairo_arc(cr, 0, 0, 1/2.0, 0, 2 * M_PI);
+      cairo_close_path(cr);
+      cairo_set_source_rgb(cr, 1.0, 1.0, 1.0);
+      cairo_set_line_width(cr, 1/8.0);
+      cairo_stroke(cr);
     }
 
     { /* Update Display */
@@ -267,43 +308,126 @@ int main(int argc, char **argv) {
     }
 
     { /* Gather Input */
+      double len;
+
       Uint8 *keystate = SDL_GetKeyState(NULL);
 
-      player.x = 0;
-      player.y = 0;
+      double x = 0;
+      double y = 0;
 
-      player.x = player.x - keystate[SDLK_LEFT];
-      player.x = player.x + keystate[SDLK_RIGHT];
-      player.y = player.y - keystate[SDLK_DOWN];
-      player.y = player.y + keystate[SDLK_UP];
+      int action = 0;
 
-      if (-1 > player.x) { player.x = -1; }
-      if ( 1 < player.x) { player.x =  1; }
-      if (-1 > player.y) { player.y = -1; }
-      if ( 1 < player.y) { player.y =  1; }
+      x = x - keystate[SDLK_LEFT];
+      x = x + keystate[SDLK_RIGHT];
+      y = y - keystate[SDLK_DOWN];
+      y = y + keystate[SDLK_UP];
+
+      action = action + keystate[SDLK_SPACE];
+      action = action + keystate[SDLK_LCTRL];
+
+      len = sqrt(x * x + y * y);
+
+      if (1 < len) {
+        x = x / len;
+        y = y / len;
+      }
+
+      if (action) { action = 1; }
+
+      if (! action) {
+        player.action = 0;
+      }
+      if (2 != player.action) {
+        player.action = player.action + action;
+      }
+
+      player.x = x;
+      player.y = y;
+
+      player.action = action;
     }
 
     { /* Animate */
-      double x0 = whomp.x;
-      double y0 = whomp.y;
-      double r  = 1/2.0;
 
-      double x = x0 + player.x * WHOMP_SPEED / FRAMERATE;
-      double y = y0 + player.y * WHOMP_SPEED / FRAMERATE;
+      { /* Whomp */
+        double x0 = whomp.x;
+        double y0 = whomp.y;
+        double r  = 1/2.0;
 
-      if ( collides_with_field(field, x, y0, r) ) {
-        x = x0;
-      }
-      if ( collides_with_field(field, x0, y, r) ) {
-        y = y0;
-      }
-      if ( collides_with_field(field, x, y, r) ) {
-        x = x0;
-        y = y0;
+        double x = x0 + player.x * WHOMP_SPEED / FRAMERATE;
+        double y = y0 + player.y * WHOMP_SPEED / FRAMERATE;
+
+        if ( collides_with_field(field, x, y0, r) ) {
+          x = x0;
+        }
+        if ( collides_with_field(field, x0, y, r) ) {
+          y = y0;
+        }
+        if ( collides_with_field(field, x, y, r) ) {
+          x = x0;
+          y = y0;
+        }
+
+        whomp.x = x;
+        whomp.y = y;
+
+        if (whomp.squibble_held) {
+          struct squibble *squibble = whomp.squibble_held;
+
+          squibble->x = whomp.x;
+          squibble->y = whomp.y;
+        } else {
+          if (1 == player.action) {
+            double x = squibble.x - whomp.x;
+            double y = squibble.y - whomp.y;
+            double d = sqrt(x * x + y * y);
+
+            if (1 > d) {
+              squibble.x  = whomp.x;
+              squibble.y  = whomp.y;
+              squibble.vx = 0;
+              squibble.vy = 0;
+
+              squibble.action = SQUIBBLE_IS_BEING_HELD;
+
+              whomp.squibble_held = &squibble;
+            }
+          }
+        }
       }
 
-      whomp.x = x;
-      whomp.y = y;
+      { /* Squibble */
+        double x0 = squibble.x;
+        double y0 = squibble.y;
+
+        double x = x0 + squibble.vx * SQUIBBLE_SPEED / FRAMERATE;
+        double y = y0 + squibble.vy * SQUIBBLE_SPEED / FRAMERATE;
+        double r = 1/2.0;
+
+        switch (squibble.action) {
+          case SQUIBBLE_IS_CHARGING_INTO_THE_FRAY:
+            if ( abs(x) < FIELD_RES / 4.0 && abs(y) < FIELD_RES / 4.0 ) {
+              squibble.vx = 0;
+              squibble.vy = 0;
+            }
+            break;
+        }
+
+        if ( collides_with_field(field, x, y0, r) ) {
+          x = x0;
+        }
+        if ( collides_with_field(field, x0, y, r) ) {
+          y = y0;
+        }
+        if ( collides_with_field(field, x, y, r) ) {
+          x = x0;
+          y = y0;
+        }
+
+        squibble.x = x;
+        squibble.y = y;
+      }
+
     }
 
   }
