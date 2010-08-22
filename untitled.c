@@ -6,6 +6,7 @@
 #undef DEBUG_SQUIBBLE_CAN_SEE
 
 #define SDL_VIDEO_FLAGS 0
+/* #define SDL_VIDEO_FLAGS SDL_FULLSCREEN */
 #define FRAMERATE 30
 
 #define WHOMP_MAX 1
@@ -19,6 +20,7 @@
 #define SQUIBBLE_BOREDOM_TIMER_DEFAULT (2/1.0)
 #define SQUIBBLE_VIEW_DISTANCE (1/2.0 * FIELD_RES)
 #define SQUIBBLE_VIEW_ANGLE (1/4.0 * M_PI)
+#define SQUIBBLE_NEAR_PROXIMITY (3/2.0)
 
 #define STUB_PATTERN { \
   0,0,0,0,0,0,0,0, \
@@ -250,12 +252,21 @@ int squibble_can_see(struct squibble *squibble, struct pos *pos) {
   return true;
 }
 
+int squibble_is_near(struct squibble *squibble, struct pos *pos) {
+  double x = pos->x - squibble->p.x;
+  double y = pos->y - squibble->p.y;
+
+  double d = sqrt(x * x + y * y);
+
+  if (SQUIBBLE_NEAR_PROXIMITY > d) { return true; }
+
+  return false;
+}
+
 void squibble_do_nothing(struct squibble *squibble) {
 }
 
 void squibble_charge(struct squibble *squibble) {
-  squibble_move(squibble, SQUIBBLE_CHARGE_SPEED);
-
   if (0 > squibble->boredom_timer) {
     squibble->chasing_whomp    = NULL;
     squibble->chasing_squibble = NULL;
@@ -267,6 +278,8 @@ void squibble_charge(struct squibble *squibble) {
   }
 
   if (squibble->chasing_whomp) {
+    squibble_move(squibble, SQUIBBLE_CHARGE_SPEED);
+
     if ( squibble_can_see(squibble, &squibble->chasing_whomp->p) ) {
       squibble->boredom_timer = SQUIBBLE_BOREDOM_TIMER_DEFAULT;
       squibble->a = angle_between(&squibble->p, &squibble->chasing_whomp->p);
@@ -276,6 +289,13 @@ void squibble_charge(struct squibble *squibble) {
   }
 
   if (squibble->chasing_squibble) {
+    if ( squibble_is_near(squibble, &squibble->chasing_squibble->p) ) {
+      squibble->a = angle_between(&squibble->p, &squibble->chasing_squibble->p);
+      return;
+    }
+
+    squibble_move(squibble, SQUIBBLE_CHARGE_SPEED);
+
     if ( squibble_can_see(squibble, &squibble->chasing_squibble->p) ) {
       squibble->boredom_timer = SQUIBBLE_BOREDOM_TIMER_DEFAULT;
       squibble->a = angle_between(&squibble->p, &squibble->chasing_squibble->p);
@@ -283,6 +303,8 @@ void squibble_charge(struct squibble *squibble) {
 
     return;
   }
+
+  squibble_move(squibble, SQUIBBLE_CHARGE_SPEED);
 }
 
 void squibble_look_for_stuff_to_chase(struct squibble *squibble) {
@@ -475,7 +497,10 @@ int main(int argc, char **argv) {
     /* TODO: cap resolution if possible */
   }
 
+  /* hres = 640; vres = 480; */
+
   sdl_surface = SDL_SetVideoMode(hres, vres, 32, SDL_VIDEO_FLAGS);
+  /* SDL_ShowCursor(false); */
 
   { /* Cairo */
     cairo_surface_t *cr_surface;
