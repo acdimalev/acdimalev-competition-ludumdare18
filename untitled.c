@@ -21,6 +21,8 @@
 #define SQUIBBLE_VIEW_DISTANCE (1/2.0 * FIELD_RES)
 #define SQUIBBLE_VIEW_ANGLE (1/4.0 * M_PI)
 #define SQUIBBLE_NEAR_PROXIMITY (3/2.0)
+#define WHOMP_RADIUS (1/2.0)
+#define SQUIBBLE_RADIUS (1/3.0)
 
 #define STUB_PATTERN { \
   0,0,0,0,0,0,0,0, \
@@ -180,7 +182,7 @@ void squibble_move(struct squibble *squibble, double speed) {
 
   double x = x0 + vx / FRAMERATE;
   double y = y0 + vy / FRAMERATE;
-  double r = 1/2.0;
+  double r = SQUIBBLE_RADIUS;
 
   if ( collides_with_field(x, y0, r) ) {
     x = x0;
@@ -586,6 +588,7 @@ int main(int argc, char **argv) {
       cairo_set_operator(cr, CAIRO_OPERATOR_OVER);
 
       /* draw field */
+      cairo_set_line_width(cr, 1/8.0);
       for (y = 0; y < 2 * s; y = y + 1) {
         for (x = 0; x < 2 * s; x = x + 1) {
           if (! FIELD[y][x]) { continue; }
@@ -597,12 +600,25 @@ int main(int argc, char **argv) {
           cairo_line_to(cr,  1/2.0, -1/2.0);
           cairo_line_to(cr,  1/2.0,  1/2.0);
           cairo_line_to(cr, -1/2.0,  1/2.0);
-          cairo_close_path(cr);
+          cairo_set_source_rgb(cr, 1.0, 1.0, 1.0);
+          cairo_fill(cr);
+
+          cairo_move_to(cr, -1/2.0, -1/2.0);
+          cairo_line_to(cr,  1/2.0, -1/2.0);
+          cairo_move_to(cr, -1/2.0,  0/2.0);
+          cairo_line_to(cr,  1/2.0,  0/2.0);
+          cairo_move_to(cr, -1/2.0,  1/2.0);
+          cairo_line_to(cr,  1/2.0,  1/2.0);
+          cairo_move_to(cr, -1/2.0, -1/2.0);
+          cairo_line_to(cr, -1/2.0,  0/2.0);
+          cairo_move_to(cr,  1/2.0, -1/2.0);
+          cairo_line_to(cr,  1/2.0,  0/2.0);
+          cairo_move_to(cr,  0/2.0,  0/2.0);
+          cairo_line_to(cr,  0/2.0,  1/2.0);
+          cairo_set_source_rgb(cr, 0.0, 0.0, 0.0);
+          cairo_stroke(cr);
         }
       }
-      cairo_set_source_rgb(cr, 1.0, 1.0, 1.0);
-      cairo_set_line_width(cr, 1/8.0);
-      cairo_stroke(cr);
 
       for (y = 0; y < 2 * s; y = y + 1) {
         for (x = 0; x < 2 * s; x = x + 1) {
@@ -625,13 +641,13 @@ int main(int argc, char **argv) {
       /* draw whomp */
       cairo_set_matrix(cr, &cm_field);
       cairo_translate(cr, whomp->p.x, whomp->p.y);
-      cairo_move_to(cr, -1/2.0, -1/2.0);
-      cairo_line_to(cr,  1/2.0, -1/2.0);
-      cairo_line_to(cr,  1/2.0,  1/2.0);
-      cairo_line_to(cr, -1/2.0,  1/2.0);
+      cairo_move_to(cr, -1/2.0,  0/2.0);
+      cairo_line_to(cr,  1/2.0,  0/2.0);
+      cairo_line_to(cr,  1/2.0,  2/2.0);
+      cairo_line_to(cr, -1/2.0,  2/2.0);
       cairo_close_path(cr);
       cairo_set_source_rgb(cr, 0.0, 0.0, 0.0);
-      cairo_set_line_width(cr, 1/8.0);
+      cairo_set_line_width(cr, 1/4.0);
       cairo_stroke_preserve(cr);
       cairo_set_source_rgb(cr, 1.0, 1.0, 1.0);
       cairo_fill(cr);
@@ -643,36 +659,62 @@ int main(int argc, char **argv) {
 
         for (i = 0; i < SQUIBBLE_MAX; i = i + 1) {
           struct squibble *squibble = &SQUIBBLES[i];
+          double r = SQUIBBLE_RADIUS;
 
           if (SQUIBBLE_IS_DEAD == squibble->state) { continue; }
 
           cairo_set_matrix(cr, &cm_field);
           cairo_translate(cr, squibble->p.x, squibble->p.y);
-          cairo_rotate(cr, squibble->a);
-          cairo_arc(cr, 0, 0, 1/2.0, 0, 2 * M_PI);
+          while (0) cairo_rotate(cr, squibble->a);
+          cairo_arc(cr, 0, r, r, 0, 2 * M_PI);
           cairo_close_path(cr);
           cairo_set_source_rgb(cr, 0.0, 0.0, 0.0);
-          cairo_set_line_width(cr, 1/8.0);
+          cairo_set_line_width(cr, 1/4.0);
           cairo_stroke_preserve(cr);
           cairo_set_source_rgb(cr, 1.0, 1.0, 1.0);
           cairo_fill(cr);
-          cairo_move_to(cr, 0, 0);
-          cairo_line_to(cr, 1/2.0, 0);
-          cairo_set_source_rgb(cr, 0.0, 0.0, 0.0);
-          cairo_stroke(cr);
+          while (0) cairo_move_to(cr, 0, 0);
+          while (0) cairo_line_to(cr, 1/2.0, 0);
+          while (0) cairo_set_source_rgb(cr, 0.0, 0.0, 0.0);
+          while (0) cairo_stroke(cr);
 
           if (SQUIBBLE_IS_SHOCKED == squibble->state) {
             double a = 0;
 
             for (a = 0; a < 2 * M_PI; a = a + M_PI / 6.0) {
-              double x = cos(a);
-              double y = sin(a);
-              cairo_move_to(cr, 5/8.0 * x, 5/8.0 * y);
-              cairo_line_to(cr, 1/1.0 * x, 1/1.0 * y);
+              double x = r * cos(a);
+              double y = r * sin(a);
+              cairo_move_to(cr, 5/4.0 * x, 5/4.0 * y + r);
+              cairo_line_to(cr, 2/1.0 * x, 2/1.0 * y + r);
             }
+            cairo_set_source_rgb(cr, 0.0, 0.0, 0.0);
+            cairo_set_line_width(cr, 1/4.0);
+            cairo_stroke_preserve(cr);
             cairo_set_source_rgb(cr, 1.0, 1.0, 1.0);
+            cairo_set_line_width(cr, 1/8.0);
             cairo_stroke(cr);
           }
+        }
+      }
+
+      /* draw field */
+      cairo_set_line_width(cr, 1/8.0);
+      for (y = 0; y < 2 * s; y = y + 1) {
+        for (x = 0; x < 2 * s; x = x + 1) {
+          if (! FIELD[y][x]) { continue; }
+
+          cairo_set_matrix(cr, &cm_field);
+          cairo_translate(cr, x - s + 1/2.0, y - s + 1/2.0);
+
+          cairo_move_to(cr, -1/2.0,  1/2.0);
+          cairo_line_to(cr,  1/2.0,  1/2.0);
+          cairo_line_to(cr,  1/2.0,  3/2.0);
+          cairo_line_to(cr, -1/2.0,  3/2.0);
+          cairo_close_path(cr);
+          cairo_set_source_rgb(cr, 1.0, 1.0, 1.0);
+          cairo_stroke_preserve(cr);
+          cairo_set_source_rgb(cr, 0.0, 0.0, 0.0);
+          cairo_fill(cr);
         }
       }
     }
@@ -760,7 +802,7 @@ int main(int argc, char **argv) {
       { /* Whomp */
         double x0 = whomp->p.x;
         double y0 = whomp->p.y;
-        double r  = 1/2.0;
+        double r  = WHOMP_RADIUS;
 
         double x = x0 + player.x * WHOMP_SPEED / FRAMERATE;
         double y = y0 + player.y * WHOMP_SPEED / FRAMERATE;
