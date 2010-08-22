@@ -168,6 +168,7 @@ void squibble_new(void) {
     squibble->p.y = d * y;
     squibble->a = angle_between(&squibble->p, &POS_CENTER);
     squibble->state = SQUIBBLE_IS_CHARGING;
+    squibble->boredom_timer = SQUIBBLE_BOREDOM_TIMER_DEFAULT;
   }
 }
 
