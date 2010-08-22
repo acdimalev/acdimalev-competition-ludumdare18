@@ -3,13 +3,23 @@
 
 #include "SDL.h"
 
+#undef DEBUG_SQUIBBLE_CAN_SEE
+
 #define SDL_VIDEO_FLAGS 0
 #define FRAMERATE 30
 
-#define WHOMP_SPEED    3/2.0
-#define SQUIBBLE_SPEED 2/1.0
+#define WHOMP_MAX 1
+#define SQUIBBLE_MAX (1 << 4)
 
 #define FIELD_RES (1 << 4)
+
+#define WHOMP_SPEED (3/2.0)
+#define SQUIBBLE_CHARGE_SPEED (2/1.0)
+#define SQUIBBLE_WANDER_SPEED (1/1.0)
+#define SQUIBBLE_BOREDOM_TIMER_DEFAULT (2/1.0)
+#define SQUIBBLE_VIEW_DISTANCE (1/2.0 * FIELD_RES)
+#define SQUIBBLE_VIEW_ANGLE (1/4.0 * M_PI)
+
 #define STUB_PATTERN { \
   0,0,0,0,0,0,0,0, \
   0,0,0,0,0,0,0,0, \
@@ -26,19 +36,339 @@
 #define true -1
 #define false 0
 
-struct whomp {
+int FIELD[FIELD_RES][FIELD_RES];
+int OVERLAY[FIELD_RES][FIELD_RES];
+
+int field(int x, int y) {
+  int s = FIELD_RES / 2;
+
+  if (x < -s) { return 0; }
+  if (x >= s) { return 0; }
+  if (y < -s) { return 0; }
+  if (y >= s) { return 0; }
+
+  return FIELD[y + s][x + s];
+}
+
+int field_mark(int x, int y) {
+  int s = FIELD_RES / 2;
+
+  if (x < -s) { return 0; }
+  if (x >= s) { return 0; }
+  if (y < -s) { return 0; }
+  if (y >= s) { return 0; }
+
+  OVERLAY[y + s][x + s] = 1;
+
+  return FIELD[y + s][x + s];
+}
+
+void clear_overlay(void) {
+  int x, y;
+
+  for (y = 0; y < FIELD_RES; y = y + 1) {
+    for (x = 0; x < FIELD_RES; x = x + 1) {
+      OVERLAY[y][x] = 0;
+    }
+  }
+}
+
+struct pos {
   double x, y;
-  struct squibble *squibble_held;
 };
 
-enum squibble_action {
-  SQUIBBLE_IS_CHARGING_INTO_THE_FRAY,
-  SQUIBBLE_IS_BEING_HELD
+struct pos POS_CENTER = {0, 0};
+
+double random_angle(void) {
+  return 2 * M_PI * rand() / (RAND_MAX + 1.0);
+}
+
+double angle_between(struct pos *a, struct pos *b) {
+  double x = b->x - a->x;
+  double y = b->y - a->y;
+
+  if (x) {
+    if (x > 0) {
+      return atan(y/x);
+    } else {
+      return atan(y/x) + M_PI;
+    }
+  } else {
+    if (y > 0) {
+      return 1/2.0 * M_PI;
+    } else {
+      return 3/2.0 * M_PI;
+    }
+  }
+}
+
+enum whomp_state {
+  WHOMP_IS_DEAD,
+  WHOMP_IS_ALIVE
+};
+
+struct whomp {
+  struct pos p;
+  double a;
+  enum   whomp_state state;
+  struct squibble    *squibble_held;
+} WHOMPS[WHOMP_MAX];
+
+enum squibble_state {
+  SQUIBBLE_IS_DEAD,
+  SQUIBBLE_IS_CHARGING,
+  SQUIBBLE_IS_WANDERING,
+  SQUIBBLE_IS_LOOKING_AROUND,
+  SQUIBBLE_IS_SHOCKED,
+  SQUIBBLE_IS_BEING_HELD,
+  SQUIBBLE_IS_AIRBORNE
 };
 
 struct squibble {
-  double x, y, vx, vy;
-  enum   squibble_action action;
+  struct pos p;
+  double a;
+  enum   squibble_state state;
+  double boredom_timer;
+  double explosion_timer;
+  struct whomp    *chasing_whomp;
+  struct squibble *chasing_squibble;
+} SQUIBBLES[SQUIBBLE_MAX];
+
+void squibble_new(void) {
+  struct squibble *squibble;
+  int    i;
+
+  for (i = 0; i < SQUIBBLE_MAX; i = i + 1) {
+    squibble = &SQUIBBLES[i];
+    if (SQUIBBLE_IS_DEAD == squibble->state) { break; }
+  }
+
+  if (SQUIBBLE_MAX == i) {
+    fprintf(stderr, "out of squibbles\n");
+    return;
+  }
+
+  {
+    double d;
+
+    double a = random_angle();
+
+    double x = cos(a);
+    double y = sin(a);
+
+    if ( abs(x) > abs(y) ) {
+      d = FIELD_RES / 2.0 / fabs(x);
+    } else {
+      d = FIELD_RES / 2.0 / fabs(y);
+    }
+
+    squibble->p.x = d * x;
+    squibble->p.y = d * y;
+    squibble->a = angle_between(&squibble->p, &POS_CENTER);
+    squibble->state = SQUIBBLE_IS_CHARGING;
+  }
+}
+
+void squibble_move(struct squibble *squibble, double speed) {
+  double x0 = squibble->p.x;
+  double y0 = squibble->p.y;
+  double vx = cos(squibble->a) * speed;
+  double vy = sin(squibble->a) * speed;
+
+  double x = x0 + vx / FRAMERATE;
+  double y = y0 + vy / FRAMERATE;
+  double r = 1/2.0;
+
+  if ( collides_with_field(x, y0, r) ) {
+    x = x0;
+  }
+  if ( collides_with_field(x0, y, r) ) {
+    y = y0;
+  }
+  if ( collides_with_field(x, y, r) ) {
+    x = x0;
+    y = y0;
+  }
+
+  squibble->p.x = x;
+  squibble->p.y = y;
+}
+
+int squibble_can_see(struct squibble *squibble, struct pos *pos) {
+  int    u, ud, uf;
+  double v, vd;
+
+  double x1 = squibble->p.x;
+  double y1 = squibble->p.y;
+  double x2 = pos->x;
+  double y2 = pos->y;
+  double a  = angle_between(&squibble->p, pos) - squibble->a;
+
+  double xd = x2 - x1;
+  double yd = y2 - y1;
+  int    b  = floor(a / (2*M_PI));
+
+  double d = sqrt(xd * xd + yd * yd);
+
+  a = a - b * 2*M_PI;
+  if (a > M_PI) { a = 2*M_PI - a; }
+
+  if (SQUIBBLE_VIEW_DISTANCE < d) { return false; }
+  if (SQUIBBLE_VIEW_ANGLE    < a) { return false; }
+
+#ifdef DEBUG_SQUIBBLE_CAN_SEE
+  field_mark(-8, -8);
+  field_mark( 7, -8);
+  field_mark( 7,  7);
+  field_mark(-8,  7);
+#endif
+
+  if ( fabs(xd) > fabs(yd) ) {
+    ud = xd < 0 ? -1 : 1;
+    uf = x2 + ud;
+    vd = yd / fabs(xd);
+    for (u = floor(x1), v = y1; u != uf; u = u + ud, v = v + vd) {
+#ifdef DEBUG_SQUIBBLE_CAN_SEE
+      if ( field_mark(u, floor(v)) ) { return false; }
+#else
+      if ( field(u, floor(v)) ) { return false; }
+#endif
+    }
+  } else {
+    ud = yd < 0 ? -1 : 1;
+    uf = y2 + ud;
+    vd = xd / fabs(yd);
+    for (u = floor(y1), v = x1; u != uf; u = u + ud, v = v + vd) {
+#ifdef DEBUG_SQUIBBLE_CAN_SEE
+      if ( field_mark(v, floor(u)) ) { return false; }
+#else
+      if ( field(u, floor(v)) ) { return false; }
+#endif
+    }
+  }
+
+  return true;
+}
+
+void squibble_do_nothing(struct squibble *squibble) {
+}
+
+void squibble_charge(struct squibble *squibble) {
+  squibble_move(squibble, SQUIBBLE_CHARGE_SPEED);
+
+  if (0 > squibble->boredom_timer) {
+    squibble->chasing_whomp    = NULL;
+    squibble->chasing_squibble = NULL;
+    fprintf(stderr, "-- MARK -- squibble is wandering\n");
+    squibble->state = SQUIBBLE_IS_WANDERING;
+    squibble->boredom_timer = SQUIBBLE_BOREDOM_TIMER_DEFAULT;
+
+    return;
+  }
+
+  if (squibble->chasing_whomp) {
+    if ( squibble_can_see(squibble, &squibble->chasing_whomp->p) ) {
+      squibble->boredom_timer = SQUIBBLE_BOREDOM_TIMER_DEFAULT;
+      squibble->a = angle_between(&squibble->p, &squibble->chasing_whomp->p);
+    }
+
+    return;
+  }
+
+  if (squibble->chasing_squibble) {
+    if ( squibble_can_see(squibble, &squibble->chasing_squibble->p) ) {
+      squibble->boredom_timer = SQUIBBLE_BOREDOM_TIMER_DEFAULT;
+      squibble->a = angle_between(&squibble->p, &squibble->chasing_squibble->p);
+    }
+
+    return;
+  }
+}
+
+void squibble_look_for_stuff_to_chase(struct squibble *squibble) {
+  int i;
+
+  for (i = 0; i < WHOMP_MAX; i = i + 1) {
+    struct whomp *whomp = &WHOMPS[i];
+
+    if (WHOMP_IS_DEAD == whomp->state) { continue; }
+
+    if ( squibble_can_see(squibble, &whomp->p) ) {
+      squibble->chasing_whomp = whomp;
+      squibble->a = angle_between(&squibble->p, &whomp->p);
+    fprintf(stderr, "-- MARK -- squibble is shocked\n");
+      squibble->state = SQUIBBLE_IS_SHOCKED;
+      squibble->boredom_timer = SQUIBBLE_BOREDOM_TIMER_DEFAULT;
+
+      return;
+    }
+  }
+
+  for (i = 0; i < SQUIBBLE_MAX; i = i + 1) {
+    struct squibble *other = &SQUIBBLES[i];
+
+    if (SQUIBBLE_IS_CHARGING != other->state) { continue; }
+
+    if (squibble == other) { continue; }
+    if ( squibble_can_see(squibble, &other->p) ) {
+      squibble->chasing_squibble = other;
+      squibble->a = angle_between(&squibble->p, &other->p);
+    fprintf(stderr, "-- MARK -- squibble is shocked\n");
+      squibble->state = SQUIBBLE_IS_SHOCKED;
+      squibble->boredom_timer = SQUIBBLE_BOREDOM_TIMER_DEFAULT;
+
+      return;
+    }
+  }
+}
+
+void squibble_wander(struct squibble *squibble) {
+  int i;
+
+  squibble_move(squibble, SQUIBBLE_WANDER_SPEED);
+
+  if (0 > squibble->boredom_timer) {
+    fprintf(stderr, "-- MARK -- squibble is looking around\n");
+    squibble->state = SQUIBBLE_IS_LOOKING_AROUND;
+    squibble->boredom_timer = SQUIBBLE_BOREDOM_TIMER_DEFAULT;
+
+    return;
+  }
+
+  squibble_look_for_stuff_to_chase(squibble);
+}
+
+void squibble_look_around(struct squibble *squibble) {
+  if (0 > squibble->boredom_timer) {
+    squibble->a = random_angle();
+    fprintf(stderr, "-- MARK -- squibble is wandering\n");
+    squibble->state = SQUIBBLE_IS_WANDERING;
+    squibble->boredom_timer = SQUIBBLE_BOREDOM_TIMER_DEFAULT;
+
+    return;
+  }
+
+  squibble_look_for_stuff_to_chase(squibble);
+}
+
+void squibble_shock(struct squibble *squibble) {
+  if (0 > squibble->boredom_timer) {
+    fprintf(stderr, "-- MARK -- squibble is charging\n");
+    squibble->state = SQUIBBLE_IS_CHARGING;
+    squibble->boredom_timer = SQUIBBLE_BOREDOM_TIMER_DEFAULT;
+
+    return;
+  }
+}
+
+void (*HANDLE_SQUIBBLE_STATE[])(struct squibble *) = {
+  squibble_do_nothing,  /* SQUIBBLE_IS_DEAD */
+  squibble_charge,      /* SQUIBBLE_IS_CHARGING */
+  squibble_wander,      /* SQUIBBLE_IS_WANDERING */
+  squibble_look_around, /* SQUIBBLE_IS_LOOKING_AROUND */
+  squibble_shock,       /* SQUIBBLE_IS_SHOCKED */
+  squibble_do_nothing,  /* SQUIBBLE_IS_BEING_HELD */
+  squibble_do_nothing   /* SQUIBBLE_IS_AIRBORNE */
 };
 
 struct player {
@@ -46,7 +376,7 @@ struct player {
   int    action;
 };
 
-void generate_field(int *field) {
+void generate_field() {
   int x, y;
 
   int s = FIELD_RES / 2;
@@ -56,7 +386,7 @@ void generate_field(int *field) {
 
   for (y = 0; y < s; y = y + 1) {
     for (x = 0; x < s; x = x + 1) {
-      field[2 * y * s + x] = pattern[y * s + x];
+      FIELD[y][x] = pattern[y * s + x];
     }
   }
 
@@ -67,14 +397,14 @@ void generate_field(int *field) {
       int yi = 2 * s - y - 1;
       int xi = 2 * s - x - 1;
 
-      field[2 * y  * s + xi] = field[2 * y * s + x];
-      field[2 * yi * s + x ] = field[2 * y * s + x];
-      field[2 * yi * s + xi] = field[2 * y * s + x];
+      FIELD[y][xi]  = FIELD[y][x];
+      FIELD[yi][x]  = FIELD[y][x];
+      FIELD[yi][xi] = FIELD[y][x];
     }
   }
 }
 
-int collides_with_field(int *field, double x, double y, double r) {
+int collides_with_field(double x, double y, double r) {
   int xi, yi;
 
   int y0 = floor(y - r);
@@ -86,7 +416,7 @@ int collides_with_field(int *field, double x, double y, double r) {
 
   for (yi = y0; yi < y1; yi = yi + 1) {
     for (xi = x0; xi < x1; xi = xi + 1) {
-      if ( field[(2 * (yi + s) * s + (xi + s))] ) {
+      if ( field(xi, yi) ) {
         return true;
       }
     }
@@ -96,7 +426,7 @@ int collides_with_field(int *field, double x, double y, double r) {
 }
 
 int main(int argc, char **argv) {
-  int    hres, vres, width, height, pixels;
+  int    hres, vres, width, height, pixels, i;
   double aspect, scale;
 
   SDL_Surface    *sdl_surface;
@@ -104,10 +434,9 @@ int main(int argc, char **argv) {
   cairo_t        *cr;
   cairo_matrix_t cm_display, cm_field;
 
-  int    field[FIELD_RES * FIELD_RES];
   struct player   player;
-  struct whomp    whomp;
-  struct squibble squibble;
+  struct whomp    *whomp    = &WHOMPS[0];
+  struct squibble *squibble = &SQUIBBLES[0];
 
   int running = true;
 
@@ -192,27 +521,25 @@ int main(int argc, char **argv) {
     next_frame = now + 1000.0 / FRAMERATE;
   }
 
-  generate_field(field);
+  generate_field();
+  clear_overlay();
 
   player.action = 0;
 
-  whomp.x = 0;
-  whomp.y = 0;
-
-  whomp.squibble_held = NULL;
-
-  {
-    double x = -FIELD_RES / 2.0;
-    double y = 4;
-
-    double d = sqrt(x * x + y * y);
-
-    squibble.x = x;
-    squibble.y = y;
-    squibble.action = SQUIBBLE_IS_CHARGING_INTO_THE_FRAY;
-    squibble.vx = -x / d;
-    squibble.vy = -y / d;
+  for (i = 0; i < WHOMP_MAX; i = i + 1) {
+    WHOMPS[i].state = WHOMP_IS_DEAD;
   }
+
+  whomp->state = WHOMP_IS_ALIVE;
+  whomp->p.x = 0;
+  whomp->p.y = 0;
+  whomp->squibble_held = NULL;
+
+  for (i = 0; i < SQUIBBLE_MAX; i = i + 1) {
+    SQUIBBLES[i].state = SQUIBBLE_IS_DEAD;
+  }
+
+  squibble_new();
 
   fprintf(stderr, "-- MARK -- setup complete\n");
 
@@ -235,7 +562,7 @@ int main(int argc, char **argv) {
       /* draw field */
       for (y = 0; y < 2 * s; y = y + 1) {
         for (x = 0; x < 2 * s; x = x + 1) {
-          if (! field[2 * y * s + x]) { continue; }
+          if (! FIELD[y][x]) { continue; }
 
           cairo_set_matrix(cr, &cm_field);
           cairo_translate(cr, x - s + 1/2.0, y - s + 1/2.0);
@@ -251,9 +578,27 @@ int main(int argc, char **argv) {
       cairo_set_line_width(cr, 1/8.0);
       cairo_stroke(cr);
 
+      for (y = 0; y < 2 * s; y = y + 1) {
+        for (x = 0; x < 2 * s; x = x + 1) {
+          if (! OVERLAY[y][x]) { continue; }
+
+          cairo_set_matrix(cr, &cm_field);
+          cairo_translate(cr, x - s + 1/2.0, y - s + 1/2.0);
+
+          cairo_move_to(cr, -1/2.0, -1/2.0);
+          cairo_line_to(cr,  1/2.0, -1/2.0);
+          cairo_line_to(cr,  1/2.0,  1/2.0);
+          cairo_line_to(cr, -1/2.0,  1/2.0);
+          cairo_close_path(cr);
+        }
+      }
+      cairo_set_source_rgb(cr, 1.0, 1.0, 1.0);
+      cairo_fill(cr);
+      clear_overlay();
+
       /* draw whomp */
       cairo_set_matrix(cr, &cm_field);
-      cairo_translate(cr, whomp.x, whomp.y);
+      cairo_translate(cr, whomp->p.x, whomp->p.y);
       cairo_move_to(cr, -1/2.0, -1/2.0);
       cairo_line_to(cr,  1/2.0, -1/2.0);
       cairo_line_to(cr,  1/2.0,  1/2.0);
@@ -266,15 +611,44 @@ int main(int argc, char **argv) {
       cairo_fill(cr);
 
       /* draw squibble */
-      cairo_set_matrix(cr, &cm_field);
-      cairo_translate(cr, squibble.x, squibble.y);
-      cairo_arc(cr, 0, 0, 1/2.0, 0, 2 * M_PI);
-      cairo_close_path(cr);
-      cairo_set_source_rgb(cr, 0.0, 0.0, 0.0);
-      cairo_set_line_width(cr, 1/8.0);
-      cairo_stroke_preserve(cr);
-      cairo_set_source_rgb(cr, 1.0, 1.0, 1.0);
-      cairo_fill(cr);
+
+      { /* Squibbles */
+        int i;
+
+        for (i = 0; i < SQUIBBLE_MAX; i = i + 1) {
+          struct squibble *squibble = &SQUIBBLES[i];
+
+          if (SQUIBBLE_IS_DEAD == squibble->state) { continue; }
+
+          cairo_set_matrix(cr, &cm_field);
+          cairo_translate(cr, squibble->p.x, squibble->p.y);
+          cairo_rotate(cr, squibble->a);
+          cairo_arc(cr, 0, 0, 1/2.0, 0, 2 * M_PI);
+          cairo_close_path(cr);
+          cairo_set_source_rgb(cr, 0.0, 0.0, 0.0);
+          cairo_set_line_width(cr, 1/8.0);
+          cairo_stroke_preserve(cr);
+          cairo_set_source_rgb(cr, 1.0, 1.0, 1.0);
+          cairo_fill(cr);
+          cairo_move_to(cr, 0, 0);
+          cairo_line_to(cr, 1/2.0, 0);
+          cairo_set_source_rgb(cr, 0.0, 0.0, 0.0);
+          cairo_stroke(cr);
+
+          if (SQUIBBLE_IS_SHOCKED == squibble->state) {
+            double a = 0;
+
+            for (a = 0; a < 2 * M_PI; a = a + M_PI / 6.0) {
+              double x = cos(a);
+              double y = sin(a);
+              cairo_move_to(cr, 5/8.0 * x, 5/8.0 * y);
+              cairo_line_to(cr, 1/1.0 * x, 1/1.0 * y);
+            }
+            cairo_set_source_rgb(cr, 1.0, 1.0, 1.0);
+            cairo_stroke(cr);
+          }
+        }
+      }
     }
 
     { /* Update Display */
@@ -306,6 +680,9 @@ int main(int argc, char **argv) {
           case SDL_KEYDOWN:
             if (SDLK_q == event.key.keysym.sym) {
               running = 0;
+            }
+            if (SDLK_n == event.key.keysym.sym) {
+              squibble_new();
             }
             break;
         }
@@ -355,82 +732,61 @@ int main(int argc, char **argv) {
     { /* Animate */
 
       { /* Whomp */
-        double x0 = whomp.x;
-        double y0 = whomp.y;
+        double x0 = whomp->p.x;
+        double y0 = whomp->p.y;
         double r  = 1/2.0;
 
         double x = x0 + player.x * WHOMP_SPEED / FRAMERATE;
         double y = y0 + player.y * WHOMP_SPEED / FRAMERATE;
 
-        if ( collides_with_field(field, x, y0, r) ) {
+        if ( collides_with_field(x, y0, r) ) {
           x = x0;
         }
-        if ( collides_with_field(field, x0, y, r) ) {
+        if ( collides_with_field(x0, y, r) ) {
           y = y0;
         }
-        if ( collides_with_field(field, x, y, r) ) {
+        if ( collides_with_field(x, y, r) ) {
           x = x0;
           y = y0;
         }
 
-        whomp.x = x;
-        whomp.y = y;
+        whomp->p.x = x;
+        whomp->p.y = y;
 
-        if (whomp.squibble_held) {
-          struct squibble *squibble = whomp.squibble_held;
+        if (whomp->squibble_held) {
+          struct squibble *squibble = whomp->squibble_held;
 
-          squibble->x = whomp.x;
-          squibble->y = whomp.y;
+          squibble->p.x = whomp->p.x;
+          squibble->p.y = whomp->p.y;
         } else {
           if (1 == player.action) {
-            double x = squibble.x - whomp.x;
-            double y = squibble.y - whomp.y;
+            double x = squibble->p.x - whomp->p.x;
+            double y = squibble->p.y - whomp->p.y;
             double d = sqrt(x * x + y * y);
 
             if (1 > d) {
-              squibble.x  = whomp.x;
-              squibble.y  = whomp.y;
-              squibble.vx = 0;
-              squibble.vy = 0;
+              squibble->p.x  = whomp->p.x;
+              squibble->p.y  = whomp->p.y;
+              squibble->state = SQUIBBLE_IS_BEING_HELD;
 
-              squibble.action = SQUIBBLE_IS_BEING_HELD;
-
-              whomp.squibble_held = &squibble;
+              whomp->squibble_held = squibble;
             }
           }
         }
       }
 
-      { /* Squibble */
-        double x0 = squibble.x;
-        double y0 = squibble.y;
+      { /* Squibbles */
+        int i;
 
-        double x = x0 + squibble.vx * SQUIBBLE_SPEED / FRAMERATE;
-        double y = y0 + squibble.vy * SQUIBBLE_SPEED / FRAMERATE;
-        double r = 1/2.0;
+        for (i = 0; i < SQUIBBLE_MAX; i = i + 1) {
+          struct squibble *squibble = &SQUIBBLES[i];
 
-        switch (squibble.action) {
-          case SQUIBBLE_IS_CHARGING_INTO_THE_FRAY:
-            if ( abs(x) < FIELD_RES / 4.0 && abs(y) < FIELD_RES / 4.0 ) {
-              squibble.vx = 0;
-              squibble.vy = 0;
-            }
-            break;
-        }
+          if (SQUIBBLE_IS_DEAD == squibble->state) { continue; }
 
-        if ( collides_with_field(field, x, y0, r) ) {
-          x = x0;
-        }
-        if ( collides_with_field(field, x0, y, r) ) {
-          y = y0;
-        }
-        if ( collides_with_field(field, x, y, r) ) {
-          x = x0;
-          y = y0;
-        }
+          squibble->boredom_timer = squibble->boredom_timer - 1.0 / FRAMERATE;
 
-        squibble.x = x;
-        squibble.y = y;
+          HANDLE_SQUIBBLE_STATE[squibble->state](squibble);
+        }
       }
 
     }
