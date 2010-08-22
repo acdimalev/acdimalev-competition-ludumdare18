@@ -24,6 +24,12 @@
 #define WHOMP_RADIUS (1/2.0)
 #define SQUIBBLE_RADIUS (1/3.0)
 
+#define SQUIBBLE_MASS 1.0
+#define WHOMP_TOSS_FORCE 8.0
+#define GRAVITY_ACCEL -12.0
+
+#define LANDING_VELOCITY (1/2.0)
+
 #define STUB_PATTERN { \
   0,0,0,0,0,0,0,0, \
   0,0,0,0,0,0,0,0, \
@@ -78,7 +84,7 @@ void clear_overlay(void) {
 }
 
 struct pos {
-  double x, y;
+  double x, y, z;
 };
 
 struct pos POS_CENTER = {0, 0};
@@ -129,7 +135,7 @@ enum squibble_state {
 };
 
 struct squibble {
-  struct pos p;
+  struct pos p, v;
   double a;
   enum   squibble_state state;
   double boredom_timer;
@@ -168,6 +174,10 @@ void squibble_new(void) {
 
     squibble->p.x = d * x;
     squibble->p.y = d * y;
+    squibble->p.z = 0;
+    squibble->v.x = 0;
+    squibble->v.y = 0;
+    squibble->v.z = 0;
     squibble->a = angle_between(&squibble->p, &POS_CENTER);
     squibble->state = SQUIBBLE_IS_CHARGING;
     squibble->boredom_timer = SQUIBBLE_BOREDOM_TIMER_DEFAULT;
@@ -386,6 +396,29 @@ void squibble_shock(struct squibble *squibble) {
   }
 }
 
+void squibble_fly(struct squibble *squibble) {
+  struct pos *p = &squibble->p;
+  struct pos *v = &squibble->v;
+
+  v->z = v->z + GRAVITY_ACCEL / FRAMERATE;
+
+  p->x = p->x + v->x / FRAMERATE;
+  p->y = p->y + v->y / FRAMERATE;
+  p->z = p->z + v->z / FRAMERATE;
+
+  if (0 > p->z) {
+    v->x =  1/2.0 * v->x;
+    v->y =  1/2.0 * v->y;
+    v->z = -1/2.0 * v->z;
+    p->z = -p->z;
+
+    if (LANDING_VELOCITY > v->z) {
+      squibble->state = SQUIBBLE_IS_LOOKING_AROUND;
+      squibble->boredom_timer = SQUIBBLE_BOREDOM_TIMER_DEFAULT;
+    }
+  }
+}
+
 void (*HANDLE_SQUIBBLE_STATE[])(struct squibble *) = {
   squibble_do_nothing,  /* SQUIBBLE_IS_DEAD */
   squibble_charge,      /* SQUIBBLE_IS_CHARGING */
@@ -393,7 +426,7 @@ void (*HANDLE_SQUIBBLE_STATE[])(struct squibble *) = {
   squibble_look_around, /* SQUIBBLE_IS_LOOKING_AROUND */
   squibble_shock,       /* SQUIBBLE_IS_SHOCKED */
   squibble_do_nothing,  /* SQUIBBLE_IS_BEING_HELD */
-  squibble_do_nothing   /* SQUIBBLE_IS_AIRBORNE */
+  squibble_fly          /* SQUIBBLE_IS_AIRBORNE */
 };
 
 struct player {
@@ -561,6 +594,7 @@ int main(int argc, char **argv) {
   whomp->state = WHOMP_IS_ALIVE;
   whomp->p.x = 0;
   whomp->p.y = 0;
+  whomp->p.z = 0;
   whomp->squibble_held = NULL;
 
   for (i = 0; i < SQUIBBLE_MAX; i = i + 1) {
@@ -664,7 +698,7 @@ int main(int argc, char **argv) {
           if (SQUIBBLE_IS_DEAD == squibble->state) { continue; }
 
           cairo_set_matrix(cr, &cm_field);
-          cairo_translate(cr, squibble->p.x, squibble->p.y);
+          cairo_translate(cr, squibble->p.x, squibble->p.y + squibble->p.z);
           while (0) cairo_rotate(cr, squibble->a);
           cairo_arc(cr, 0, r, r, 0, 2 * M_PI);
           cairo_close_path(cr);
@@ -782,19 +816,16 @@ int main(int argc, char **argv) {
         y = y / len;
       }
 
-      if (action) { action = 1; }
-
       if (! action) {
         player.action = 0;
-      }
-      if (2 != player.action) {
-        player.action = player.action + action;
+      } else {
+        if (2 != player.action) {
+          player.action = player.action + 1;
+        }
       }
 
       player.x = x;
       player.y = y;
-
-      player.action = action;
     }
 
     { /* Animate */
@@ -806,6 +837,12 @@ int main(int argc, char **argv) {
 
         double x = x0 + player.x * WHOMP_SPEED / FRAMERATE;
         double y = y0 + player.y * WHOMP_SPEED / FRAMERATE;
+
+        if (player.x || player.y) {
+          struct pos p = {player.x, player.y};
+
+          whomp->a = angle_between(&POS_CENTER, &p);
+        }
 
         if ( collides_with_field(x, y0, r) ) {
           x = x0;
@@ -826,18 +863,42 @@ int main(int argc, char **argv) {
 
           squibble->p.x = whomp->p.x;
           squibble->p.y = whomp->p.y;
+          squibble->a   = whomp->a;
+
+          if (1 == player.action) {
+            double ah = whomp->a;
+            double av = 1/4.0 * M_PI;
+            double accel = WHOMP_TOSS_FORCE / SQUIBBLE_MASS;
+
+            squibble->v.x = accel * cos(av) * cos(ah);
+            squibble->v.y = accel * cos(av) * sin(ah);
+            squibble->v.z = accel * sin(av);
+            squibble->state = SQUIBBLE_IS_AIRBORNE;
+
+            whomp->squibble_held = NULL;
+          }
         } else {
           if (1 == player.action) {
-            double x = squibble->p.x - whomp->p.x;
-            double y = squibble->p.y - whomp->p.y;
-            double d = sqrt(x * x + y * y);
+            for (i = 0; i < SQUIBBLE_MAX; i = i + 1) {
+              struct squibble *squibble = &SQUIBBLES[i];
 
-            if (1 > d) {
-              squibble->p.x  = whomp->p.x;
-              squibble->p.y  = whomp->p.y;
-              squibble->state = SQUIBBLE_IS_BEING_HELD;
+              if (SQUIBBLE_IS_DEAD == squibble->state) { continue; }
+              if (SQUIBBLE_IS_AIRBORNE == squibble->state) { continue; }
 
-              whomp->squibble_held = squibble;
+              double x = squibble->p.x - whomp->p.x;
+              double y = squibble->p.y - whomp->p.y;
+              double d = sqrt(x * x + y * y);
+
+              if (1 > d) {
+                squibble->p.x = whomp->p.x;
+                squibble->p.y = whomp->p.y;
+                squibble->p.z = 2 * WHOMP_RADIUS;
+                squibble->a   = whomp->a;
+                squibble->state = SQUIBBLE_IS_BEING_HELD;
+
+                whomp->squibble_held = squibble;
+              }
+
             }
           }
         }
