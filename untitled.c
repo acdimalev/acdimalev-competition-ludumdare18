@@ -24,6 +24,7 @@
 #define SQUIBBLE_NEAR_PROXIMITY (3/2.0)
 #define WHOMP_RADIUS (1/2.0)
 #define SQUIBBLE_RADIUS (1/3.0)
+#define EXPLOSION_RADIUS (1/2.0)
 
 #define SQUIBBLE_MASS 1.0
 #define WHOMP_TOSS_FORCE 8.0
@@ -165,6 +166,16 @@ void explode(
   explosion->p.x = (squibble->body.p.x + other->body.p.x) / 2;
   explosion->p.y = (squibble->body.p.y + other->body.p.y) / 2;
   explosion->p.z = (squibble->body.p.z + other->body.p.z) / 2;
+
+  for (i = 0; i < WHOMP_MAX; i = i + 1) {
+    struct whomp *whomp = &WHOMPS[i];
+
+    double d = dist(&whomp->p, &explosion->p);
+
+    if (d < EXPLOSION_RADIUS + WHOMP_RADIUS) {
+      whomp->state = WHOMP_IS_DEAD;
+    }
+  }
 }
 
 void squibble_new(void) {
@@ -693,19 +704,28 @@ int main(int argc, char **argv) {
       cairo_fill(cr);
       clear_overlay();
 
-      /* draw whomp */
-      cairo_set_matrix(cr, &cm_field);
-      cairo_translate(cr, whomp->p.x, whomp->p.y);
-      cairo_move_to(cr, -1/2.0,  0/2.0);
-      cairo_line_to(cr,  1/2.0,  0/2.0);
-      cairo_line_to(cr,  1/2.0,  2/2.0);
-      cairo_line_to(cr, -1/2.0,  2/2.0);
-      cairo_close_path(cr);
-      cairo_set_source_rgb(cr, 0.0, 0.0, 0.0);
-      cairo_set_line_width(cr, 1/4.0);
-      cairo_stroke_preserve(cr);
-      cairo_set_source_rgb(cr, 1.0, 1.0, 1.0);
-      cairo_fill(cr);
+      { /* draw whomps */
+        int i;
+
+        for (i = 0; i < WHOMP_MAX; i = i + 1) {
+          struct whomp *whomp = &WHOMPS[i];
+
+          if (WHOMP_IS_DEAD == whomp->state) { continue; }
+
+          cairo_set_matrix(cr, &cm_field);
+          cairo_translate(cr, whomp->p.x, whomp->p.y);
+          cairo_move_to(cr, -1/2.0,  0/2.0);
+          cairo_line_to(cr,  1/2.0,  0/2.0);
+          cairo_line_to(cr,  1/2.0,  2/2.0);
+          cairo_line_to(cr, -1/2.0,  2/2.0);
+          cairo_close_path(cr);
+          cairo_set_source_rgb(cr, 0.0, 0.0, 0.0);
+          cairo_set_line_width(cr, 1/4.0);
+          cairo_stroke_preserve(cr);
+          cairo_set_source_rgb(cr, 1.0, 1.0, 1.0);
+          cairo_fill(cr);
+        }
+      }
 
       { /* draw explosions */
         int i;
