@@ -3,6 +3,8 @@
 
 #include "SDL.h"
 
+#include "physics.h"
+
 #undef DEBUG_SQUIBBLE_CAN_SEE
 
 #define SDL_VIDEO_FLAGS 0
@@ -10,9 +12,8 @@
 #define FRAMERATE 30
 
 #define WHOMP_MAX 1
-#define SQUIBBLE_MAX (1 << 4)
-
-#define FIELD_RES (1 << 4)
+#define SQUIBBLE_MAX (1 << 8)
+#define EXPLOSION_MAX (1 << 4)
 
 #define WHOMP_SPEED (3/2.0)
 #define SQUIBBLE_CHARGE_SPEED (2/1.0)
@@ -46,19 +47,7 @@
 #define true -1
 #define false 0
 
-int FIELD[FIELD_RES][FIELD_RES];
 int OVERLAY[FIELD_RES][FIELD_RES];
-
-int field(int x, int y) {
-  int s = FIELD_RES / 2;
-
-  if (x < -s) { return 0; }
-  if (x >= s) { return 0; }
-  if (y < -s) { return 0; }
-  if (y >= s) { return 0; }
-
-  return FIELD[y + s][x + s];
-}
 
 int field_mark(int x, int y) {
   int s = FIELD_RES / 2;
@@ -93,7 +82,7 @@ double random_angle(void) {
   return 2 * M_PI * rand() / (RAND_MAX + 1.0);
 }
 
-double angle_between(struct pos *a, struct pos *b) {
+double angle_between(struct vec *a, struct vec *b) {
   double x = b->x - a->x;
   double y = b->y - a->y;
 
@@ -118,7 +107,7 @@ enum whomp_state {
 };
 
 struct whomp {
-  struct pos p;
+  struct vec p;
   double a;
   enum   whomp_state state;
   struct squibble    *squibble_held;
@@ -135,7 +124,7 @@ enum squibble_state {
 };
 
 struct squibble {
-  struct pos p, v;
+  struct body body;
   double a;
   enum   squibble_state state;
   double boredom_timer;
@@ -143,6 +132,40 @@ struct squibble {
   struct whomp    *chasing_whomp;
   struct squibble *chasing_squibble;
 } SQUIBBLES[SQUIBBLE_MAX];
+
+struct explosion {
+  int    is_alive;
+  struct vec p;
+  double timer;
+} EXPLOSIONS[EXPLOSION_MAX];
+
+void explode(
+    struct squibble *squibble,
+    struct squibble *other
+    ) {
+  struct explosion *explosion;
+  int i;
+
+  squibble->state = SQUIBBLE_IS_DEAD;
+  other->state    = SQUIBBLE_IS_DEAD;
+
+  for (i = 0; i < EXPLOSION_MAX; i = i + 1) {
+    explosion = &EXPLOSIONS[i];
+
+    if (! explosion->is_alive) { break; }
+  }
+
+  if (i == EXPLOSION_MAX) {
+    fprintf(stderr, "out of explosions\n");
+    return;
+  }
+
+  explosion->is_alive = true;
+  explosion->timer = 1/8.0;
+  explosion->p.x = (squibble->body.p.x + other->body.p.x) / 2;
+  explosion->p.y = (squibble->body.p.y + other->body.p.y) / 2;
+  explosion->p.z = (squibble->body.p.z + other->body.p.z) / 2;
+}
 
 void squibble_new(void) {
   struct squibble *squibble;
@@ -172,52 +195,40 @@ void squibble_new(void) {
       d = FIELD_RES / 2.0 / fabs(y);
     }
 
-    squibble->p.x = d * x;
-    squibble->p.y = d * y;
-    squibble->p.z = 0;
-    squibble->v.x = 0;
-    squibble->v.y = 0;
-    squibble->v.z = 0;
-    squibble->a = angle_between(&squibble->p, &POS_CENTER);
+    squibble->body.state = BODY_IS_CONTROLLED;
+    squibble->body.p.x = d * x;
+    squibble->body.p.y = d * y;
+    squibble->body.p.z = SQUIBBLE_RADIUS;
+    squibble->body.v.x = 0;
+    squibble->body.v.y = 0;
+    squibble->body.v.z = 0;
+    squibble->body.r = SQUIBBLE_RADIUS;
+    squibble->a = angle_between(&squibble->body.p, &VEC0);
     squibble->state = SQUIBBLE_IS_CHARGING;
     squibble->boredom_timer = SQUIBBLE_BOREDOM_TIMER_DEFAULT;
   }
 }
 
 void squibble_move(struct squibble *squibble, double speed) {
-  double x0 = squibble->p.x;
-  double y0 = squibble->p.y;
   double vx = cos(squibble->a) * speed;
   double vy = sin(squibble->a) * speed;
 
-  double x = x0 + vx / FRAMERATE;
-  double y = y0 + vy / FRAMERATE;
-  double r = SQUIBBLE_RADIUS;
-
-  if ( collides_with_field(x, y0, r) ) {
-    x = x0;
+  /* BOUG */
+  if (BODY_IS_CONTROLLED == squibble->body.state) {
+    squibble->body.v.x = vx;
+    squibble->body.v.y = vy;
   }
-  if ( collides_with_field(x0, y, r) ) {
-    y = y0;
-  }
-  if ( collides_with_field(x, y, r) ) {
-    x = x0;
-    y = y0;
-  }
-
-  squibble->p.x = x;
-  squibble->p.y = y;
 }
 
-int squibble_can_see(struct squibble *squibble, struct pos *pos) {
+int squibble_can_see(struct squibble *squibble, struct vec *pos) {
   int    u, ud, uf;
   double v, vd;
 
-  double x1 = squibble->p.x;
-  double y1 = squibble->p.y;
+  double x1 = squibble->body.p.x;
+  double y1 = squibble->body.p.y;
   double x2 = pos->x;
   double y2 = pos->y;
-  double a  = angle_between(&squibble->p, pos) - squibble->a;
+  double a  = angle_between(&squibble->body.p, pos) - squibble->a;
 
   double xd = x2 - x1;
   double yd = y2 - y1;
@@ -265,9 +276,9 @@ int squibble_can_see(struct squibble *squibble, struct pos *pos) {
   return true;
 }
 
-int squibble_is_near(struct squibble *squibble, struct pos *pos) {
-  double x = pos->x - squibble->p.x;
-  double y = pos->y - squibble->p.y;
+int squibble_is_near(struct squibble *squibble, struct vec *pos) {
+  double x = pos->x - squibble->body.p.x;
+  double y = pos->y - squibble->body.p.y;
 
   double d = sqrt(x * x + y * y);
 
@@ -295,23 +306,28 @@ void squibble_charge(struct squibble *squibble) {
 
     if ( squibble_can_see(squibble, &squibble->chasing_whomp->p) ) {
       squibble->boredom_timer = SQUIBBLE_BOREDOM_TIMER_DEFAULT;
-      squibble->a = angle_between(&squibble->p, &squibble->chasing_whomp->p);
+      squibble->a = angle_between(&squibble->body.p,
+          &squibble->chasing_whomp->p);
     }
 
     return;
   }
 
   if (squibble->chasing_squibble) {
-    if ( squibble_is_near(squibble, &squibble->chasing_squibble->p) ) {
-      squibble->a = angle_between(&squibble->p, &squibble->chasing_squibble->p);
+    if ( squibble_is_near(squibble,
+          &squibble->chasing_squibble->body.p) ) {
+      squibble->a = angle_between(&squibble->body.p,
+          &squibble->chasing_squibble->body.p);
       return;
     }
 
     squibble_move(squibble, SQUIBBLE_CHARGE_SPEED);
 
-    if ( squibble_can_see(squibble, &squibble->chasing_squibble->p) ) {
+    if ( squibble_can_see(squibble,
+          &squibble->chasing_squibble->body.p) ) {
       squibble->boredom_timer = SQUIBBLE_BOREDOM_TIMER_DEFAULT;
-      squibble->a = angle_between(&squibble->p, &squibble->chasing_squibble->p);
+      squibble->a = angle_between(&squibble->body.p,
+          &squibble->chasing_squibble->body.p);
     }
 
     return;
@@ -330,7 +346,7 @@ void squibble_look_for_stuff_to_chase(struct squibble *squibble) {
 
     if ( squibble_can_see(squibble, &whomp->p) ) {
       squibble->chasing_whomp = whomp;
-      squibble->a = angle_between(&squibble->p, &whomp->p);
+      squibble->a = angle_between(&squibble->body.p, &whomp->p);
     fprintf(stderr, "-- MARK -- squibble is shocked\n");
       squibble->state = SQUIBBLE_IS_SHOCKED;
       squibble->boredom_timer = SQUIBBLE_BOREDOM_TIMER_DEFAULT;
@@ -345,9 +361,9 @@ void squibble_look_for_stuff_to_chase(struct squibble *squibble) {
     if (SQUIBBLE_IS_CHARGING != other->state) { continue; }
 
     if (squibble == other) { continue; }
-    if ( squibble_can_see(squibble, &other->p) ) {
+    if ( squibble_can_see(squibble, &other->body.p) ) {
       squibble->chasing_squibble = other;
-      squibble->a = angle_between(&squibble->p, &other->p);
+      squibble->a = angle_between(&squibble->body.p, &other->body.p);
     fprintf(stderr, "-- MARK -- squibble is shocked\n");
       squibble->state = SQUIBBLE_IS_SHOCKED;
       squibble->boredom_timer = SQUIBBLE_BOREDOM_TIMER_DEFAULT;
@@ -397,8 +413,8 @@ void squibble_shock(struct squibble *squibble) {
 }
 
 void squibble_fly(struct squibble *squibble) {
-  struct pos *p = &squibble->p;
-  struct pos *v = &squibble->v;
+  struct vec *p = &squibble->body.p;
+  struct vec *v = &squibble->body.v;
 
   v->z = v->z + GRAVITY_ACCEL / FRAMERATE;
 
@@ -426,7 +442,7 @@ void (*HANDLE_SQUIBBLE_STATE[])(struct squibble *) = {
   squibble_look_around, /* SQUIBBLE_IS_LOOKING_AROUND */
   squibble_shock,       /* SQUIBBLE_IS_SHOCKED */
   squibble_do_nothing,  /* SQUIBBLE_IS_BEING_HELD */
-  squibble_fly          /* SQUIBBLE_IS_AIRBORNE */
+  squibble_do_nothing   /* SQUIBBLE_IS_AIRBORNE */
 };
 
 struct player {
@@ -496,7 +512,8 @@ int main(int argc, char **argv) {
   struct whomp    *whomp    = &WHOMPS[0];
   struct squibble *squibble = &SQUIBBLES[0];
 
-  int running = true;
+  int    running = true;
+  double squibble_spawn_timer = 0;
 
   if (FIELD_RES_IS_INVALID) {
     fprintf(stderr, "Field resolution must be a multiple of two.\n");
@@ -601,6 +618,10 @@ int main(int argc, char **argv) {
     SQUIBBLES[i].state = SQUIBBLE_IS_DEAD;
   }
 
+  for (i = 0; i < EXPLOSION_MAX; i = i + 1) {
+    EXPLOSIONS[i].is_alive = 0;
+  }
+
   squibble_new();
 
   fprintf(stderr, "-- MARK -- setup complete\n");
@@ -686,6 +707,41 @@ int main(int argc, char **argv) {
       cairo_set_source_rgb(cr, 1.0, 1.0, 1.0);
       cairo_fill(cr);
 
+      { /* draw explosions */
+        int i;
+
+        for (i = 0; i < EXPLOSION_MAX; i = i + 1) {
+          struct explosion *explosion = &EXPLOSIONS[i];
+          double n = 7;
+
+          int a;
+
+          if (! explosion->is_alive) { continue; }
+
+          cairo_set_matrix(cr, &cm_field);
+          cairo_translate(cr, explosion->p.x,
+              explosion->p.y + explosion->p.z);
+
+          for (a = 0; a < 2*n; a = a + 1) {
+            double x = cos(2*M_PI * a / (2*n));
+            double y = sin(2*M_PI * a / (2*n));
+
+            if (a & 1) {
+              cairo_line_to(cr, x, y);
+            } else {
+              cairo_line_to(cr, 0.5 * x, 0.5 * y);
+            }
+          }
+
+          cairo_close_path(cr);
+          cairo_set_source_rgb(cr, 0.0, 0.0, 0.0);
+          cairo_set_line_width(cr, 1/4.0);
+          cairo_stroke_preserve(cr);
+          cairo_set_source_rgb(cr, 1.0, 1.0, 1.0);
+          cairo_fill(cr);
+        }
+      }
+
       /* draw squibble */
 
       { /* Squibbles */
@@ -698,9 +754,10 @@ int main(int argc, char **argv) {
           if (SQUIBBLE_IS_DEAD == squibble->state) { continue; }
 
           cairo_set_matrix(cr, &cm_field);
-          cairo_translate(cr, squibble->p.x, squibble->p.y + squibble->p.z);
+          cairo_translate(cr, squibble->body.p.x,
+              squibble->body.p.y + squibble->body.p.z);
           while (0) cairo_rotate(cr, squibble->a);
-          cairo_arc(cr, 0, r, r, 0, 2 * M_PI);
+          cairo_arc(cr, 0, 0, r, 0, 2 * M_PI);
           cairo_close_path(cr);
           cairo_set_source_rgb(cr, 0.0, 0.0, 0.0);
           cairo_set_line_width(cr, 1/4.0);
@@ -718,8 +775,8 @@ int main(int argc, char **argv) {
             for (a = 0; a < 2 * M_PI; a = a + M_PI / 6.0) {
               double x = r * cos(a);
               double y = r * sin(a);
-              cairo_move_to(cr, 5/4.0 * x, 5/4.0 * y + r);
-              cairo_line_to(cr, 2/1.0 * x, 2/1.0 * y + r);
+              cairo_move_to(cr, 5/4.0 * x, 5/4.0 * y);
+              cairo_line_to(cr, 2/1.0 * x, 2/1.0 * y);
             }
             cairo_set_source_rgb(cr, 0.0, 0.0, 0.0);
             cairo_set_line_width(cr, 1/4.0);
@@ -783,9 +840,6 @@ int main(int argc, char **argv) {
             if (SDLK_q == event.key.keysym.sym) {
               running = 0;
             }
-            if (SDLK_n == event.key.keysym.sym) {
-              squibble_new();
-            }
             break;
         }
       }
@@ -839,9 +893,9 @@ int main(int argc, char **argv) {
         double y = y0 + player.y * WHOMP_SPEED / FRAMERATE;
 
         if (player.x || player.y) {
-          struct pos p = {player.x, player.y};
+          struct vec p = {player.x, player.y};
 
-          whomp->a = angle_between(&POS_CENTER, &p);
+          whomp->a = angle_between(&VEC0, &p);
         }
 
         if ( collides_with_field(x, y0, r) ) {
@@ -861,8 +915,11 @@ int main(int argc, char **argv) {
         if (whomp->squibble_held) {
           struct squibble *squibble = whomp->squibble_held;
 
-          squibble->p.x = whomp->p.x;
-          squibble->p.y = whomp->p.y;
+          /* BUG */
+          squibble->body.p.x = whomp->p.x;
+          squibble->body.p.y = whomp->p.y;
+          squibble->body.p.z = 2 * WHOMP_RADIUS;
+          squibble->body.v.z = 0;
           squibble->a   = whomp->a;
 
           if (1 == player.action) {
@@ -870,9 +927,10 @@ int main(int argc, char **argv) {
             double av = 1/4.0 * M_PI;
             double accel = WHOMP_TOSS_FORCE / SQUIBBLE_MASS;
 
-            squibble->v.x = accel * cos(av) * cos(ah);
-            squibble->v.y = accel * cos(av) * sin(ah);
-            squibble->v.z = accel * sin(av);
+            /* BUG */
+            squibble->body.v.x = accel * cos(av) * cos(ah);
+            squibble->body.v.y = accel * cos(av) * sin(ah);
+            squibble->body.v.z = accel * sin(av);
             squibble->state = SQUIBBLE_IS_AIRBORNE;
 
             whomp->squibble_held = NULL;
@@ -885,14 +943,14 @@ int main(int argc, char **argv) {
               if (SQUIBBLE_IS_DEAD == squibble->state) { continue; }
               if (SQUIBBLE_IS_AIRBORNE == squibble->state) { continue; }
 
-              double x = squibble->p.x - whomp->p.x;
-              double y = squibble->p.y - whomp->p.y;
+              double x = squibble->body.p.x - whomp->p.x;
+              double y = squibble->body.p.y - whomp->p.y;
               double d = sqrt(x * x + y * y);
 
               if (1 > d) {
-                squibble->p.x = whomp->p.x;
-                squibble->p.y = whomp->p.y;
-                squibble->p.z = 2 * WHOMP_RADIUS;
+                squibble->body.p.x = whomp->p.x;
+                squibble->body.p.y = whomp->p.y;
+                squibble->body.p.z = 2 * WHOMP_RADIUS;
                 squibble->a   = whomp->a;
                 squibble->state = SQUIBBLE_IS_BEING_HELD;
 
@@ -905,7 +963,13 @@ int main(int argc, char **argv) {
       }
 
       { /* Squibbles */
-        int i;
+        int i, j;
+
+        squibble_spawn_timer = squibble_spawn_timer - 1.0/FRAMERATE;
+        if (0 > squibble_spawn_timer) {
+          squibble_new();
+          squibble_spawn_timer = 1;
+        }
 
         for (i = 0; i < SQUIBBLE_MAX; i = i + 1) {
           struct squibble *squibble = &SQUIBBLES[i];
@@ -914,7 +978,48 @@ int main(int argc, char **argv) {
 
           squibble->boredom_timer = squibble->boredom_timer - 1.0 / FRAMERATE;
 
+          /* BUG */
+          if (BODY_IS_CONTROLLED == squibble->body.state) {
+            squibble->body.v.x = 0;
+            squibble->body.v.y = 0;
+
+            if (SQUIBBLE_IS_AIRBORNE == squibble->state) {
+              squibble->state = SQUIBBLE_IS_LOOKING_AROUND;
+              squibble->boredom_timer = SQUIBBLE_BOREDOM_TIMER_DEFAULT;
+            }
+          }
+
           HANDLE_SQUIBBLE_STATE[squibble->state](squibble);
+
+          body_animate(&squibble->body);
+
+          for (j = i + 1; j < SQUIBBLE_MAX; j = j + 1) {
+            struct squibble *other = &SQUIBBLES[j];
+
+            if (SQUIBBLE_IS_DEAD == other->state) { continue; }
+
+            double d = dist(&squibble->body.p, &other->body.p);
+
+            if (d < 2 * SQUIBBLE_RADIUS) {
+              explode(squibble, other);
+            }
+          }
+        }
+      }
+
+      { /* Explosions */
+        int i;
+
+        for (i = 0; i < EXPLOSION_MAX; i = i + 1) {
+          struct explosion *explosion = &EXPLOSIONS[i];
+
+          if (! explosion->is_alive) { continue; }
+
+          explosion->timer = explosion->timer - 1.0/FRAMERATE;
+
+          if (0 > explosion->timer) {
+            explosion->is_alive = false;
+          }
         }
       }
 
